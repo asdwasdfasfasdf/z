@@ -7850,12 +7850,55 @@
             }
         }
 
-        // 页面加载完成后应用增强
+        // SHA1 加密函数
+        function sha1(str) {
+            let hash = '';
+            try {
+                const cryptoObj = window.crypto || window.msCrypto;
+                if (cryptoObj && cryptoObj.subtle) {
+                    const encoder = new TextEncoder();
+                    return cryptoObj.subtle.digest('SHA-1', encoder.encode(str))
+                        .then(buffer => {
+                            const hashArray = Array.from(new Uint8Array(buffer));
+                            hash = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+                            return hash;
+                        });
+                } else {
+                    // 降级方案：简单的哈希实现（非安全，仅用于演示）
+                    let hash = 0;
+                    for (let i = 0; i < str.length; i++) {
+                        const char = str.charCodeAt(i);
+                        hash = ((hash << 5) - hash) + char;
+                        hash = hash & hash;
+                    }
+                    return Promise.resolve(hash.toString(16));
+                }
+            } catch (e) {
+                // 降级方案
+                let hash = 0;
+                for (let i = 0; i < str.length; i++) {
+                    const char = str.charCodeAt(i);
+                    hash = ((hash << 5) - hash) + char;
+                    hash = hash & hash;
+                }
+                return Promise.resolve(hash.toString(16));
+            }
+        }
+
+        // 页面加载完成后检查登录状态
         document.addEventListener('DOMContentLoaded', function() {
+            // 检查本地存储中是否有SHA1加密的用户信息
+            const storedUser = localStorage.getItem('user');
+            if (storedUser) {
+                // 有存储的用户信息，直接进入系统
+                document.getElementById('loginOverlay').style.display = 'none';
+            }
+            
+            // 应用下拉框增强
             setTimeout(applySimpleSelectEnhance, 1500);
         });
 
-        // 验证函数
+        // 登录验证函数
         function handleLogin(event) {
             event.preventDefault();
             
@@ -7863,13 +7906,18 @@
             const password = document.getElementById('password').value;
             const errorElement = document.getElementById('loginError');
             
-            // 验证zuoming
-            if (username === 'zuoming' && password === '123456') {
-                // 成功，隐藏界面
-                document.getElementById('loginOverlay').style.display = 'none';
-                errorElement.classList.remove('show');
+            // 验证用户名和密码
+            if (username === 'zuoming' && password === '123456asd') {
+                // 登录成功
+                sha1(username + password).then(hash => {
+                    // 存入
+                    localStorage.setItem('user', hash);
+                    // 隐藏登录界面
+                    document.getElementById('loginOverlay').style.display = 'none';
+                    errorElement.classList.remove('show');
+                });
             } else {
-                // 失败，显示错误信息
+                // 登录失败，显示错误信息
                 errorElement.classList.add('show');
             }
         }
