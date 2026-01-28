@@ -7899,28 +7899,7 @@
         });
 
         // 登录验证函数
-        function handleLogin(event) {
-            event.preventDefault();
-            
-            const username = document.getElementById('username').value;
-            const password = document.getElementById('password').value;
-            const errorElement = document.getElementById('loginError');
-            
-            // 验证用户名和密码
-            if (username === 'zuoming' && password === '123456asd') {
-                // 登录成功
-                sha1(username + password).then(hash => {
-                    // 存入
-                    localStorage.setItem('user', hash);
-                    // 隐藏登录界面
-                    document.getElementById('loginOverlay').style.display = 'none';
-                    errorElement.classList.remove('show');
-                });
-            } else {
-                // 登录失败，显示错误信息
-                errorElement.classList.add('show');
-            }
-        }
+       
     </script>
 
     <!-- 引入简化版下拉框增强组件 -->
