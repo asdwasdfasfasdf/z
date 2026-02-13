@@ -1641,6 +1641,23 @@
             <div class="container">
                 <div class="question-card">
                     <h2 style="color: #f44336; margin-bottom: 20px; text-align: center;">错题本 - 选择分类</h2>
+                    
+                    <!-- 错题设置区域 -->
+                    <div style="margin-bottom: 30px; padding: 20px; background: #f8f9fa; border-radius: 12px;">
+                        <h3 style="color: #333; margin-bottom: 15px; text-align: center;">📋 错题设置</h3>
+                        <div style="display: flex; align-items: center; justify-content: center; gap: 15px;">
+                            <label style="color: #333; font-weight: 500;">连续答对</label>
+                            <input type="number" id="correct-count-setting" min="1" max="10" value="3" 
+                                   onchange="saveCorrectCountSetting()"
+                                   onblur="saveCorrectCountSetting()"
+                                   style="width: 80px; padding: 10px; border: 2px solid #e0e0e0; border-radius: 8px; font-size: 16px; text-align: center;">
+                            <label style="color: #333; font-weight: 500;">次后从错题本移除</label>
+                        </div>
+                        <div style="text-align: center; margin-top: 10px; font-size: 14px; color: #666;">
+                            提示：设置连续答对次数，达到后自动从错题本中移除
+                        </div>
+                    </div>
+                    
                     <div id="wrong-question-list" style="max-height: 400px; overflow-y: auto;">
                         <!-- 错题分类列表将动态生成 -->
                     </div>
@@ -2891,7 +2908,8 @@
                         categoryName,
                         question: cleanQuestion,
                         questionIndex,
-                        addedAt: new Date().toISOString()
+                        addedAt: new Date().toISOString(),
+                        correctCount: 0 // 添加答对次数字段，默认为0
                     };
 
                     const request = store.add(wrongQuestion);
@@ -5399,13 +5417,78 @@
             return currentQuestionIndex;
         }
 
-        // 从错题库中删除答对的题目
+        // 获取用户设置的连续答对次数
+        function getCorrectCountSetting() {
+            // 先从localStorage中获取保存的设置
+            const savedValue = localStorage.getItem('correctCountSetting');
+            if (savedValue) {
+                return parseInt(savedValue);
+            }
+            
+            // 如果没有保存的设置，从输入框获取或使用默认值
+            const input = document.getElementById('correct-count-setting');
+            if (input) {
+                const value = parseInt(input.value);
+                const finalValue = isNaN(value) || value < 1 ? 3 : Math.min(value, 10);
+                // 保存到localStorage
+                localStorage.setItem('correctCountSetting', finalValue);
+                return finalValue;
+            }
+            return 3; // 默认值
+        }
+
+        // 保存用户设置的连续答对次数
+        function saveCorrectCountSetting() {
+            const input = document.getElementById('correct-count-setting');
+            if (input) {
+                const value = parseInt(input.value);
+                const finalValue = isNaN(value) || value < 1 ? 3 : Math.min(value, 10);
+                // 更新输入框显示的值
+                input.value = finalValue;
+                // 保存到localStorage
+                localStorage.setItem('correctCountSetting', finalValue);
+                console.log(`保存连续答对次数设置：${finalValue}次`);
+            }
+        }
+
+        // 从错题库中删除答对的题目（根据设置的次数后移除）
         async function removeCorrectWrongQuestion(questionIndex) {
             try {
                 const wrongQuestionId = wrongQuestionIds[questionIndex];
                 if (wrongQuestionId) {
-                    await deleteWrongQuestion(wrongQuestionId);
-                    console.log('Correct answer! Removed from wrong questions.');
+                    // 获取用户设置的连续答对次数
+                    const requiredCorrectCount = getCorrectCountSetting();
+                    
+                    // 打开数据库事务，获取错题信息
+                    const transaction = db.transaction(['wrongQuestions'], 'readwrite');
+                    const store = transaction.objectStore('wrongQuestions');
+                    const request = store.get(wrongQuestionId);
+                    
+                    request.onsuccess = function() {
+                        const wrongQuestion = request.result;
+                        if (wrongQuestion) {
+                            // 答对次数加1
+                            wrongQuestion.correctCount = (wrongQuestion.correctCount || 0) + 1;
+                            
+                            // 达到设置的连续答对次数后从错题本中移除
+                            if (wrongQuestion.correctCount >= requiredCorrectCount) {
+                                store.delete(wrongQuestionId);
+                                console.log(`连续答对${requiredCorrectCount}次！从错题本中移除。`);
+                            } else {
+                                // 更新答对次数
+                                store.put(wrongQuestion);
+                                console.log(`答对次数更新为 ${wrongQuestion.correctCount} 次，还需答对 ${requiredCorrectCount - wrongQuestion.correctCount} 次才能移除。`);
+                            }
+                        }
+                    };
+                    
+                    transaction.oncomplete = function() {
+                        console.log('错题处理事务完成');
+                    };
+                    
+                    transaction.onerror = function() {
+                        console.error('处理错题时出错:', transaction.error);
+                    };
                 }
             } catch (error) {
                 console.error('Error removing wrong question:', error);
@@ -7894,12 +7977,28 @@
                 document.getElementById('loginOverlay').style.display = 'none';
             }
             
+            // 应用保存的错题设置
+            const savedSetting = localStorage.getItem('correctCountSetting');
+            const input = document.getElementById('correct-count-setting');
+            if (savedSetting && input) {
+                input.value = savedSetting;
+            }
+            
             // 应用下拉框增强
             setTimeout(applySimpleSelectEnhance, 1500);
         });
 
         // 登录验证函数
-      
+        function handleLogin(event) {
+            event.preventDefault();
+            
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+            const errorElement = document.getElementById('loginError');
+            
+            // 验证用
+          
+        }
     </script>
 
     <!-- 引入简化版下拉框增强组件 -->
