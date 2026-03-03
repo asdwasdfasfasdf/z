@@ -112,6 +112,31 @@
             animation: fadeIn 0.3s ease;
         }
 
+        /* Toast 提示框样式 */
+        .toast {
+            position: fixed;
+            top: 80px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0, 0, 0, 0.8);
+            color: white;
+            padding: 12px 24px;
+            border-radius: 25px;
+            font-size: 14px;
+            z-index: 10000;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+            pointer-events: none;
+        }
+
+        .toast.show {
+            opacity: 1;
+        }
+
+        .toast.success {
+            background: linear-gradient(135deg, #4caf50 0%, #45a049 100%);
+        }
+
         /* 导航栏样式 */
         .navbar {
             background: white;
@@ -1430,6 +1455,9 @@
     </style>
 </head>
 <body>
+    <!-- Toast 提示框 -->
+    <div class="toast" id="toast"></div>
+
     <!-- 登录页面 -->
     <div class="login-overlay" id="loginOverlay">
         <div class="login-container">
@@ -1520,6 +1548,12 @@
                 <a href="#" onclick="navigateTo('combo-records', event); return false;">
                     <span class="menu-icon">🎯📋</span>
                     <span>150题记录</span>
+                </a>
+            </li>
+            <li class="sidebar-menu-item">
+                <a href="#" onclick="navigateTo('slashed-questions', event); return false;">
+                    <span class="menu-icon">⚔️</span>
+                    <span>斩题管理</span>
                 </a>
             </li>
         </ul>
@@ -2048,6 +2082,24 @@
             </div>
         </div>
 
+        <!-- 斩题管理页面 -->
+        <div id="page-slashed-questions" class="page">
+            <div class="container">
+                <div class="question-card">
+                    <h2 style="color: #e91e63; margin-bottom: 30px; text-align: center;">⚔️ 斩题管理</h2>
+                    <p style="text-align: center; color: #666; margin-bottom: 20px;">已斩的题目在答题时会自动跳过</p>
+                    
+                    <div id="slashed-questions-list" style="max-height: 600px; overflow-y: auto;">
+                        <!-- 斩题列表将动态生成 -->
+                    </div>
+                    
+                    <div id="no-slashed-message" style="text-align: center; padding: 40px; color: #999; display: none;">
+                        暂无已斩题目
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- 原有的答题区域等 -->
         <div class="container">
         <div class="header" id="quiz-header" style="display: none;">
@@ -2227,6 +2279,8 @@
                 showCombinationConfigPage();
             } else if (pageName === 'combo-records') {
                 showComboRecordsPage();
+            } else if (pageName === 'slashed-questions') {
+                showSlashedQuestionsPage();
             }
 
             return false; // 阻止链接默认行为
@@ -2251,7 +2305,7 @@
         // 初始化 IndexedDB
         function initDB() {
             return new Promise((resolve, reject) => {
-                const request = indexedDB.open('QuizDB', 5); // 升级版本号到5
+                const request = indexedDB.open('QuizDB', 6); // 升级版本号到6
 
                 request.onerror = () => reject(request.error);
                 request.onsuccess = () => {
@@ -2291,6 +2345,16 @@
                         historyStore.createIndex('lastAnswered', 'lastAnswered', { unique: false });
                         // 创建复合索引用于快速查询
                         historyStore.createIndex('categoryId_questionHash', ['categoryId', 'questionHash'], { unique: true });
+                    }
+
+                    // 创建斩题存储
+                    if (!db.objectStoreNames.contains('slashedQuestions')) {
+                        const slashedStore = db.createObjectStore('slashedQuestions', { keyPath: 'id', autoIncrement: true });
+                        slashedStore.createIndex('categoryId', 'categoryId', { unique: false });
+                        slashedStore.createIndex('questionHash', 'questionHash', { unique: false });
+                        slashedStore.createIndex('slashedAt', 'slashedAt', { unique: false });
+                        // 创建复合索引用于快速查询和去重
+                        slashedStore.createIndex('categoryId_questionHash', ['categoryId', 'questionHash'], { unique: true });
                     }
                 };
             });
@@ -2995,6 +3059,162 @@
             });
         }
 
+        // 保存斩题到数据库
+        async function saveSlashedQuestion(categoryId, question, categoryName) {
+            const questionHash = generateQuestionHash(question);
+            const transaction = db.transaction(['slashedQuestions'], 'readwrite');
+            const store = transaction.objectStore('slashedQuestions');
+
+            const slashedQuestion = {
+                categoryId: categoryId,
+                categoryName: categoryName || '未知分类',
+                questionHash: questionHash,
+                question: question,
+                slashedAt: new Date().toISOString()
+            };
+
+            return new Promise((resolve, reject) => {
+                const request = store.add(slashedQuestion);
+                request.onsuccess = () => {
+                    console.log('斩题保存成功');
+                    resolve();
+                };
+                request.onerror = (event) => {
+                    // 如果是重复键错误，忽略
+                    if (event.target.error.name === 'ConstraintError') {
+                        console.log('该题已被斩过');
+                        resolve();
+                    } else {
+                        reject(event.target.error);
+                    }
+                };
+            });
+        }
+
+        // 获取某分类下所有已斩题目的哈希列表
+        async function getSlashedQuestionHashes(categoryId) {
+            const transaction = db.transaction(['slashedQuestions'], 'readonly');
+            const store = transaction.objectStore('slashedQuestions');
+            const index = store.index('categoryId');
+            const request = index.getAll(categoryId);
+
+            return new Promise((resolve, reject) => {
+                request.onsuccess = () => {
+                    const slashedQuestions = request.result;
+                    const hashes = new Set(slashedQuestions.map(sq => sq.questionHash));
+                    resolve(hashes);
+                };
+                request.onerror = () => reject(request.error);
+            });
+        }
+
+        // 获取所有已斩题目（按分类分组）
+        async function getAllSlashedQuestionsGrouped() {
+            const transaction = db.transaction(['slashedQuestions'], 'readonly');
+            const store = transaction.objectStore('slashedQuestions');
+            const request = store.getAll();
+
+            return new Promise((resolve, reject) => {
+                request.onsuccess = () => {
+                    const slashedQuestions = request.result;
+                    const grouped = {};
+                    slashedQuestions.forEach(sq => {
+                        if (!grouped[sq.categoryId]) {
+                            grouped[sq.categoryId] = {
+                                categoryId: sq.categoryId,
+                                categoryName: sq.categoryName || '未知分类',
+                                questions: []
+                            };
+                        }
+                        grouped[sq.categoryId].questions.push(sq);
+                    });
+                    resolve(Object.values(grouped));
+                };
+                request.onerror = () => reject(request.error);
+            });
+        }
+
+        // 删除斩题记录
+        async function deleteSlashedQuestion(id) {
+            const transaction = db.transaction(['slashedQuestions'], 'readwrite');
+            const store = transaction.objectStore('slashedQuestions');
+            await store.delete(id);
+
+            return new Promise((resolve, reject) => {
+                transaction.oncomplete = () => resolve();
+                transaction.onerror = () => reject(transaction.error);
+            });
+        }
+
+        // 清空某分类的所有斩题记录
+        async function clearSlashedQuestionsByCategory(categoryId) {
+            return new Promise((resolve, reject) => {
+                const transaction = db.transaction(['slashedQuestions'], 'readwrite');
+                const store = transaction.objectStore('slashedQuestions');
+                
+                // 获取所有记录
+                const getAllRequest = store.getAll();
+                
+                getAllRequest.onsuccess = () => {
+                    const allRecords = getAllRequest.result;
+                    console.log('所有斩题记录:', allRecords.length);
+                    
+                    // 过滤出匹配的记录（同时匹配数字和字符串类型）
+                    const matchingRecords = allRecords.filter(record => {
+                        const recordCategoryId = record.categoryId;
+                        const match = recordCategoryId == categoryId || 
+                                     recordCategoryId === categoryId ||
+                                     String(recordCategoryId) === String(categoryId);
+                        return match;
+                    });
+                    
+                    console.log(`分类 ${categoryId} 找到 ${matchingRecords.length} 条斩题记录待删除`);
+                    
+                    // 逐个删除
+                    matchingRecords.forEach(record => {
+                        console.log('删除记录ID:', record.id, '分类ID:', record.categoryId);
+                        store.delete(record.id);
+                    });
+                };
+                
+                transaction.oncomplete = () => {
+                    console.log('清空斩题记录完成');
+                    resolve();
+                };
+                transaction.onerror = () => reject(transaction.error);
+            });
+        }
+
+        // 斩题功能 - 斩掉当前题目
+        // 显示Toast提示
+        function showToast(message, type = 'success', duration = 2000) {
+            const toast = document.getElementById('toast');
+            toast.textContent = message;
+            toast.className = 'toast ' + type;
+            toast.classList.add('show');
+            
+            setTimeout(() => {
+                toast.classList.remove('show');
+            }, duration);
+        }
+
+        async function slashCurrentQuestion() {
+            if (currentQuestionIndex < 0 || currentQuestionIndex >= questions.length) {
+                return;
+            }
+
+            const question = questions[currentQuestionIndex];
+            const categoryId = currentCategory.id;
+            const categoryName = currentCategory.name;
+
+            try {
+                await saveSlashedQuestion(categoryId, question, categoryName);
+                showToast('⚔️ 斩题成功！', 'success');
+            } catch (error) {
+                console.error('斩题失败:', error);
+            }
+        }
+
         // 清空某个分类的所有错题
         async function clearWrongQuestionsByCategory(categoryId) {
             const wrongQuestions = await getAllWrongQuestionsByCategory(categoryId);
@@ -3448,8 +3668,23 @@
 
                 currentCategory = category;
 
-                // 使用智能选题：优先选择未答过的题目
-                const allQuestions = category.questions;
+                // 获取已斩题目的哈希列表
+                const slashedHashes = await getSlashedQuestionHashes(categoryId);
+                
+                // 过滤掉已斩的题目
+                const allQuestions = category.questions.filter(q => {
+                    const hash = generateQuestionHash(q);
+                    return !slashedHashes.has(hash);
+                });
+
+                // 如果所有题目都被斩了，提示用户
+                if (allQuestions.length === 0) {
+                    document.getElementById('loading').style.display = 'none';
+                    alert('该题库所有题目都已被斩！请到"斩题管理"中取消斩题后再试。');
+                    navigateTo('home');
+                    return;
+                }
+
                 const targetCount = allQuestions.length; // 普通模式选择全部题目
 
                 questions = await smartSelectQuestions(categoryId, allQuestions, targetCount);
@@ -3457,6 +3692,11 @@
                 // 显示选题统计信息
                 if (questions._selectionInfo) {
                     showSelectionInfo(questions._selectionInfo, category.name);
+                }
+
+                // 显示斩题过滤信息
+                if (slashedHashes.size > 0) {
+                    console.log(`已过滤 ${slashedHashes.size} 道已斩题目`);
                 }
 
                 userAnswers = new Array(questions.length).fill(null);
@@ -5034,6 +5274,7 @@
                     <div class="buttons">
                         <button class="btn btn-secondary" onclick="backToCategoryList()">返回分类</button>
                         <button class="btn btn-secondary" onclick="openEditAnswer()" style="background: #ff9800; color: white; border-color: #ff9800;">修改答案</button>
+                        <button class="btn btn-secondary" onclick="slashCurrentQuestion()" style="background: #e91e63; color: white; border-color: #e91e63;">⚔️ 斩题</button>
                     </div>
                 </div>
             `;
@@ -7597,6 +7838,117 @@
         }
 
         // 显示150题答题记录页面
+        // 显示斩题管理页面
+        async function showSlashedQuestionsPage() {
+            try {
+                const slashedGroups = await getAllSlashedQuestionsGrouped();
+                const listContainer = document.getElementById('slashed-questions-list');
+                const noMessage = document.getElementById('no-slashed-message');
+
+                if (slashedGroups.length === 0) {
+                    listContainer.innerHTML = '';
+                    noMessage.style.display = 'block';
+                    return;
+                }
+
+                noMessage.style.display = 'none';
+                let html = '';
+
+                slashedGroups.forEach((group, groupIndex) => {
+                    html += `
+                        <div style="margin-bottom: 15px; border: 2px solid #e0e0e0; border-radius: 12px; overflow: hidden;">
+                            <div onclick="toggleSlashedGroup(${groupIndex})" style="background: linear-gradient(135deg, #e91e63 0%, #c2185b 100%); color: white; padding: 15px 20px; display: flex; justify-content: space-between; align-items: center; cursor: pointer;">
+                                <div style="display: flex; align-items: center; gap: 10px;">
+                                    <span id="slash-toggle-icon-${groupIndex}" style="font-size: 12px; transition: transform 0.3s;">▶</span>
+                                    <strong style="font-size: 18px;">${group.categoryName || '未知分类'}</strong>
+                                    <span style="background: rgba(255,255,255,0.2); padding: 4px 12px; border-radius: 15px; font-size: 14px;">
+                                        ${group.questions.length} 道已斩
+                                    </span>
+                                </div>
+                                <button onclick="event.stopPropagation(); clearSlashedByCategory('${group.categoryId}')" 
+                                        style="background: white; color: #e91e63; border: none; padding: 8px 16px; border-radius: 20px; cursor: pointer; font-weight: 500;">
+                                    清空该分类
+                                </button>
+                            </div>
+                            <div id="slashed-group-${groupIndex}" style="padding: 15px; background: white; display: none;">
+                    `;
+
+                    group.questions.forEach((sq, idx) => {
+                        const questionText = sq.question.question ? 
+                            (sq.question.question.length > 80 ? sq.question.question.substring(0, 80) + '...' : sq.question.question) 
+                            : '未知题目';
+                        const slashedDate = sq.slashedAt ? new Date(sq.slashedAt).toLocaleDateString('zh-CN') : '未知时间';
+                        
+                        html += `
+                            <div style="padding: 12px; margin: 8px 0; background: #f8f9fa; border-radius: 8px; display: flex; justify-content: space-between; align-items: center; border-left: 4px solid #e91e63;">
+                                <div style="flex: 1;">
+                                    <div style="color: #333; font-size: 14px; line-height: 1.5;">
+                                        <strong>${idx + 1}.</strong> ${questionText}
+                                    </div>
+                                    <div style="color: #999; font-size: 12px; margin-top: 5px;">
+                                        斩题时间: ${slashedDate}
+                                    </div>
+                                </div>
+                                <button onclick="unslashQuestion('${sq.id}')" 
+                                        style="background: #4caf50; color: white; border: none; padding: 6px 14px; border-radius: 15px; cursor: pointer; font-size: 13px; margin-left: 10px;">
+                                    取消斩题
+                                </button>
+                            </div>
+                        `;
+                    });
+
+                    html += `
+                            </div>
+                        </div>
+                    `;
+                });
+
+                listContainer.innerHTML = html;
+            } catch (error) {
+                console.error('Error showing slashed questions page:', error);
+                document.getElementById('slashed-questions-list').innerHTML = 
+                    '<p style="text-align: center; color: #f44336; padding: 20px;">加载失败，请重试</p>';
+            }
+        }
+
+        // 展开/收起斩题分组
+        function toggleSlashedGroup(index) {
+            const content = document.getElementById(`slashed-group-${index}`);
+            const icon = document.getElementById(`slash-toggle-icon-${index}`);
+            if (content.style.display === 'none') {
+                content.style.display = 'block';
+                icon.style.transform = 'rotate(90deg)';
+            } else {
+                content.style.display = 'none';
+                icon.style.transform = 'rotate(0deg)';
+            }
+        }
+
+        // 取消斩题
+        async function unslashQuestion(id) {
+            try {
+                await deleteSlashedQuestion(parseInt(id));
+                showToast('已取消斩题！', 'success');
+                showSlashedQuestionsPage();
+            } catch (error) {
+                console.error('Error unslashing question:', error);
+            }
+        }
+
+        // 清空某分类的所有斩题
+        async function clearSlashedByCategory(categoryId) {
+            try {
+                // 确保 categoryId 类型一致
+                const id = typeof categoryId === 'string' ? parseInt(categoryId) : categoryId;
+                console.log('清空分类ID:', id, '原类型:', typeof categoryId);
+                await clearSlashedQuestionsByCategory(id);
+                showToast('已清空该分类的斩题记录！', 'success');
+                showSlashedQuestionsPage();
+            } catch (error) {
+                console.error('Error clearing slashed questions:', error);
+            }
+        }
+
         async function showComboRecordsPage() {
             try {
                 // 获取所有150题的答题记录（组合答题模式的记录）
@@ -7996,8 +8348,7 @@
             const password = document.getElementById('password').value;
             const errorElement = document.getElementById('loginError');
             
-            // 验证用
-          
+           
         }
     </script>
 
